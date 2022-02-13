@@ -1,4 +1,4 @@
-module caddy-follow-redirect
+module followredirect
 
 go 1.16
 

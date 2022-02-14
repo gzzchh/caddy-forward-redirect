@@ -1,4 +1,5 @@
 #!/bin/bash
+#export GOFLAGS='-gcflags="all=-N -l"'
 XCADDY_SKIP_CLEANUP=1 XCADDY_SKIP_BUILD=1 XCADDY_RACE_DETECTOR=1 XCADDY_DEBUG=1 xcaddy build \
     --output caddy-debug \
     --with github.com/caddyserver/forwardproxy@caddy2 \

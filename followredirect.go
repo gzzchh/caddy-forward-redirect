@@ -1,6 +1,7 @@
 package followredirect
 
 import (
+	"fmt"
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
@@ -34,6 +35,7 @@ func (f FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 	logger := f.logger.With(
 		zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}),
 	)
+	fmt.Println(w)
 	logger.Debug(w.Header().Get("Location"))
 
 	//fmt.Println()

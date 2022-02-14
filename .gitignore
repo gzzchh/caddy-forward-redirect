@@ -1,1 +1,3 @@
-.idea/
+#.idea/
+caddy-debug
+caddy-src/

@@ -1,6 +1,7 @@
 package followredirect
 
 import (
+	"fmt"
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
@@ -23,19 +24,34 @@ func init() {
 type FollowRedirect struct {
 	Recursive           bool `json:"recursive,omitempty"`
 	logger              *zap.Logger
-	Transport           http.RoundTripper `json:"-"`
+	ctx                 caddy.Context
+	TransportRaw        http.RoundTripper `json:"-"`
 	ReverseProxyHandler reverseproxy.Handler
 }
 
 // Provision 就是解析然后往结构体塞数据
-func (f FollowRedirect) Provision(c caddy.Context) error {
-	//TODO implement me
-	//panic("implement me")
+func (f *FollowRedirect) Provision(ctx caddy.Context) error {
+	// start by loading modules
+	if f.TransportRaw != nil {
+		mod, err := ctx.LoadModule(f, "TransportRaw")
+		if err != nil {
+			return fmt.Errorf("loading transport: %v", err)
+		}
+		f.TransportRaw = mod.(http.RoundTripper)
+	}
+	f.ReverseProxyHandler = reverseproxy.Handler{}
+	err := f.ReverseProxyHandler.Provision(ctx)
+	if err != nil {
+		f.logger.Error("ReverseProxyHandler Provision error", zap.Error(err))
+		return err
+	}
+	f.ctx = ctx
+	f.logger = ctx.Logger(f)
 	return nil
 }
 
 // ServeHTTP 在这里处理 HTTP 内容
-func (f FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+func (f *FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
 	newLocation, _ := repl.Get("http.reverse_proxy.header.Location")
 	newLocationStr := newLocation.(string)
@@ -62,13 +78,14 @@ func (f FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 	// 改写 URL
 	r.URL = newUrl
 	r.RequestURI = newUrl.RequestURI()
+	r.Host = newUrl.Host + ":" + strconv.Itoa(newUrlPort)
+	r.TLS.ServerName = newUrl.Host
 	//fmt.Println(newUrl.Scheme, newUrl.Host)
 
 	// 下面的初始化是构造最简化能直接调用反代的代码
-	// 进行一个 ReverseProxyHandler 的初始化
-	f.ReverseProxyHandler = reverseproxy.Handler{
-		Upstreams: make(reverseproxy.UpstreamPool, 1),
-	}
+	// 进行一个 Upstreams 的初始化
+	f.ReverseProxyHandler.Upstreams = make(reverseproxy.UpstreamPool, 1)
+
 	// 进行一个 LoadBalancing 的初始化
 	f.ReverseProxyHandler.LoadBalancing = &reverseproxy.LoadBalancing{
 		SelectionPolicy: &reverseproxy.RandomSelection{},
@@ -78,7 +95,7 @@ func (f FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		Host: &upstreamHost{},
 		Dial: newUrl.Host + ":" + strconv.Itoa(newUrlPort),
 	}
-	// 进行一个 Transport 的初始化
+	// 进行一个 TransportRaw 的初始化
 	if f.ReverseProxyHandler.Transport == nil {
 		t := &reverseproxy.HTTPTransport{
 			KeepAlive: &reverseproxy.KeepAlive{
@@ -87,13 +104,21 @@ func (f FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 				MaxIdleConnsPerHost: 32, // seems about optimal, see #2805
 			},
 			DialTimeout: caddy.Duration(10 * time.Second),
+			TLS:         &reverseproxy.TLSConfig{},
+			Versions:    []string{"1.1", "2"},
+			Transport:   &http.Transport{},
 		}
-		//err := t.Provision(ctx)
-		//if err != nil {
-		//	return fmt.Errorf("provisioning default transport: %v", err)
-		//}
 		f.ReverseProxyHandler.Transport = t
 	}
+	//reflect.ValueOf(&f.ReverseProxyHandler).FieldByName("logger").SetPointer(unsafe.Pointer(&f.logger))
+
+	// 进行一个 HealthChecks 的初始化
+	//if f.ReverseProxyHandler.HealthChecks == nil {
+	//	f.ReverseProxyHandler.HealthChecks = new(reverseproxy.HealthChecks)
+	//}
+	//if f.ReverseProxyHandler.HealthChecks.Active == nil {
+	//	f.ReverseProxyHandler.HealthChecks.Active = new(reverseproxy.ActiveHealthChecks)
+	//}
 
 	f.ReverseProxyHandler.ServeHTTP(w, r, next)
 
@@ -102,7 +127,7 @@ func (f FollowRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 	return next.ServeHTTP(w, r)
 }
 
-func (f FollowRedirect) CaddyModule() caddy.ModuleInfo {
+func (FollowRedirect) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.follow_redirect",
 		New: func() caddy.Module { return new(FollowRedirect) },
@@ -115,7 +140,7 @@ func (f *FollowRedirect) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
-	var m FollowRedirect
+	m := new(FollowRedirect)
 	err := m.UnmarshalCaddyfile(h.Dispenser)
 	return m, err
 }
